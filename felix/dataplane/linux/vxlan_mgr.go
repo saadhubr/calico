@@ -15,6 +15,7 @@
 package intdataplane
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -193,6 +194,14 @@ func (m *vxlanManager) OnUpdate(protoBufMsg interface{}) {
 		// Process remote IPAM blocks.
 		if msg.Type == proto.RouteType_REMOTE_WORKLOAD && msg.IpPoolType == proto.IPPoolType_VXLAN {
 			m.logCtx.WithField("msg", msg).Debug("VXLAN data plane received route update")
+			m.routesByDest[msg.Dst] = msg
+			m.routesDirty = true
+		}
+
+		// Process routes for remote tunnel endpoints as well. This is necessary to ensure hosts can
+		// communicate with tunnel endpoints that whose IP address has been borrowed.
+		if msg.Type == proto.RouteType_REMOTE_TUNNEL && msg.IpPoolType == proto.IPPoolType_VXLAN && msg.Borrowed {
+			m.logCtx.WithField("msg", msg).Debug("VXLAN data plane received route update for borrowed VXLAN tunnel IP")
 			m.routesByDest[msg.Dst] = msg
 			m.routesDirty = true
 		}
@@ -490,23 +499,27 @@ func (m *vxlanManager) noEncapRoute(cidr ip.CIDR, r *proto.RouteUpdate) *routeta
 }
 
 func (m *vxlanManager) tunneledRoute(cidr ip.CIDR, r *proto.RouteUpdate) *routetable.Target {
+	if r.Type == proto.RouteType_REMOTE_TUNNEL {
+		// We treat remote tunnel routes as directly connected. They don't have a gateway of
+		// the VTEP because they ARE the VTEP!
+		return &routetable.Target{CIDR: cidr}
+	}
+
 	// Extract the gateway addr for this route based on its remote VTEP.
 	vtep, ok := m.vtepsByNode[r.DstNodeName]
 	if !ok {
 		// When the VTEP arrives, it'll set routesDirty=true so this loop will execute again.
 		return nil
 	}
-
 	vtepAddr := vtep.Ipv4Addr
 	if m.ipVersion == 6 {
 		vtepAddr = vtep.Ipv6Addr
 	}
-	vxlanRoute := routetable.Target{
+	return &routetable.Target{
 		Type: routetable.TargetTypeVXLAN,
 		CIDR: cidr,
 		GW:   ip.FromString(vtepAddr),
 	}
-	return &vxlanRoute
 }
 
 func (m *vxlanManager) OnParentNameUpdate(name string) {
@@ -821,6 +834,10 @@ func vxlanLinksIncompat(l1, l2 netlink.Link) string {
 
 	if v1.GBP != v2.GBP {
 		return fmt.Sprintf("gbp: %v vs %v", v1.GBP, v2.GBP)
+	}
+
+	if len(v1.Attrs().HardwareAddr) > 0 && len(v2.Attrs().HardwareAddr) > 0 && !bytes.Equal(v1.Attrs().HardwareAddr, v2.Attrs().HardwareAddr) {
+		return fmt.Sprintf("vtep mac addr: %v vs %v", v1.Attrs().HardwareAddr, v2.Attrs().HardwareAddr)
 	}
 
 	return ""

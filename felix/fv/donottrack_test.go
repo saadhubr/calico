@@ -22,17 +22,15 @@ import (
 	"strings"
 	"time"
 
-	. "github.com/projectcalico/calico/felix/fv/connectivity"
-	"github.com/projectcalico/calico/felix/fv/utils"
-
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-
 	api "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
 
 	"github.com/projectcalico/calico/felix/bpf/ifstate"
+	. "github.com/projectcalico/calico/felix/fv/connectivity"
 	"github.com/projectcalico/calico/felix/fv/containers"
 	"github.com/projectcalico/calico/felix/fv/infrastructure"
+	"github.com/projectcalico/calico/felix/fv/utils"
 	"github.com/projectcalico/calico/felix/fv/workload"
 	"github.com/projectcalico/calico/libcalico-go/lib/apiconfig"
 	client "github.com/projectcalico/calico/libcalico-go/lib/clientv3"
@@ -380,6 +378,17 @@ var _ = infrastructure.DatastoreDescribe("_BPF-SAFE_ do-not-track policy tests; 
 
 				ensureRightIFStateFlags(felix, ifstate.FlgIPv4Ready|ifstate.FlgIPv6Ready, ifstate.FlgBondSlave, map[string]uint32{"bond0": ifstate.FlgIPv4Ready | ifstate.FlgIPv6Ready | ifstate.FlgBond})
 				createHostEndpoint(felix, "bond0", []string{felix.IP, felix.IPv6}, client, ctx)
+			}
+
+			for _, felix := range tc.Felixes {
+				Eventually(func() bool {
+					return bpfCheckIfPolicyProgrammed(felix, "bond0", "egress", "default.allow-egress", "allow", false)
+				}, "5s", "200ms").Should(BeTrue())
+
+				Eventually(func() bool {
+					return bpfCheckIfPolicyProgrammedV6(felix, "bond0", "egress", "default.allow-egress", "allow", false)
+				}, "5s", "200ms").Should(BeTrue())
+
 			}
 		})
 

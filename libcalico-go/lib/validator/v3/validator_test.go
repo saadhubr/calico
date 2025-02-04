@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2022 Tigera, Inc. All rights reserved.
+// Copyright (c) 2016-2024 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import (
 
 	libapiv3 "github.com/projectcalico/calico/libcalico-go/lib/apis/v3"
 	"github.com/projectcalico/calico/libcalico-go/lib/backend/encap"
+	"github.com/projectcalico/calico/libcalico-go/lib/names"
 	v3 "github.com/projectcalico/calico/libcalico-go/lib/validator/v3"
 )
 
@@ -42,6 +43,11 @@ func init() {
 	var V256 = 256
 	var Vffffffff = 0xffffffff
 	var V100000000 = 0x100000000
+	var tierOrder = float64(100.0)
+	var defaultTierOrder = api.DefaultTierOrder
+	var anpTierOrder = api.AdminNetworkPolicyTierOrder
+	var banpTierOrder = api.BaselineAdminNetworkPolicyTierOrder
+	var defaultTierBadOrder = float64(10.0)
 
 	// We need pointers to bools, so define the values here.
 	var Vtrue = true
@@ -120,6 +126,10 @@ func init() {
 	windowsManageFirewallRulesEnabled := api.WindowsManageFirewallRulesEnabled
 	windowsManageFirewallRulesDisabled := api.WindowsManageFirewallRulesDisabled
 	var windowsManageFirewallRulesBlah api.WindowsManageFirewallRulesMode = "blah"
+
+	// assignmentMode variables
+	assignmentModeAutomatic := api.Automatic
+	assignmentModeInvalid := new(api.AssignmentMode)
 
 	// Perform validation on error messages from validator
 	DescribeTable("Validator errors",
@@ -1037,6 +1047,17 @@ func init() {
 					},
 				},
 			}, true),
+		Entry("should reject IP pool with invalid allowed uses combination",
+			api.IPPool{
+				ObjectMeta: v1.ObjectMeta{Name: "pool.name"},
+				Spec: api.IPPoolSpec{
+					CIDR: netv4_4,
+					AllowedUses: []api.IPPoolAllowedUse{
+						api.IPPoolAllowedUseLoadBalancer,
+						api.IPPoolAllowedUseTunnel,
+					},
+				},
+			}, false),
 		Entry("should reject IP pool with invalid allowed uses",
 			api.IPPool{
 				ObjectMeta: v1.ObjectMeta{Name: "pool.name"},
@@ -1047,7 +1068,66 @@ func init() {
 					},
 				},
 			}, false),
-
+		Entry("should accept IP pool with valid AssignmentMode",
+			api.IPPool{
+				ObjectMeta: v1.ObjectMeta{Name: "pool.name"},
+				Spec: api.IPPoolSpec{
+					CIDR:           netv4_4,
+					AssignmentMode: &assignmentModeAutomatic,
+				},
+			}, true),
+		Entry("should reject IP pool with invalid assignment mode",
+			api.IPPool{
+				ObjectMeta: v1.ObjectMeta{Name: "pool.name"},
+				Spec: api.IPPoolSpec{
+					CIDR:           netv4_4,
+					AssignmentMode: assignmentModeInvalid,
+				},
+			}, false),
+		Entry("should reject IP pool with LoadBlancer and disableBGPExport true",
+			api.IPPool{
+				ObjectMeta: v1.ObjectMeta{Name: "pool.name"},
+				Spec: api.IPPoolSpec{
+					CIDR: netv4_4,
+					AllowedUses: []api.IPPoolAllowedUse{
+						api.IPPoolAllowedUseLoadBalancer,
+					},
+					DisableBGPExport: Vtrue,
+				},
+			}, false),
+		Entry("should reject IP pool with LoadBlancer and VXLAN mode enabled",
+			api.IPPool{
+				ObjectMeta: v1.ObjectMeta{Name: "pool.name"},
+				Spec: api.IPPoolSpec{
+					CIDR: netv4_4,
+					AllowedUses: []api.IPPoolAllowedUse{
+						api.IPPoolAllowedUseLoadBalancer,
+					},
+					VXLANMode: api.VXLANModeAlways,
+				},
+			}, false),
+		Entry("should reject IP pool with LoadBlancer and IPIP mode enabled",
+			api.IPPool{
+				ObjectMeta: v1.ObjectMeta{Name: "pool.name"},
+				Spec: api.IPPoolSpec{
+					CIDR: netv4_4,
+					AllowedUses: []api.IPPoolAllowedUse{
+						api.IPPoolAllowedUseLoadBalancer,
+					},
+					IPIPMode: api.IPIPModeAlways,
+				},
+			}, false),
+		Entry("should reject IP pool with LoadBlancer and nodeSelector other than all()",
+			api.IPPool{
+				ObjectMeta: v1.ObjectMeta{Name: "pool.name"},
+				Spec: api.IPPoolSpec{
+					CIDR: netv4_4,
+					AllowedUses: []api.IPPoolAllowedUse{
+						api.IPPoolAllowedUseLoadBalancer,
+					},
+					NodeSelector: "!all()",
+				},
+			}, false),
 		// (API) IPReservation
 		Entry("should accept IPReservation with an IP",
 			api.IPReservation{
@@ -2362,6 +2442,73 @@ func init() {
 			}, true,
 		),
 
+		// Tiers.
+		Entry("Tier: valid name", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: "foo"},
+			Spec: api.TierSpec{
+				Order: &tierOrder,
+			}}, true),
+		Entry("Tier: valid name with dash", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: "fo-o"},
+			Spec: api.TierSpec{
+				Order: &tierOrder,
+			}}, true),
+		Entry("Tier: disallow dot in name", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: "fo.o"},
+			Spec: api.TierSpec{
+				Order: &tierOrder,
+			}}, false),
+		Entry("Tier: allow valid name of 63 chars", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: string(value63)},
+			Spec: api.TierSpec{
+				Order: &tierOrder,
+			}}, true),
+		Entry("Tier: disallow a name of 64 chars", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: string(value64)},
+			Spec: api.TierSpec{
+				Order: &tierOrder,
+			}}, false),
+		Entry("Tier: disallow other chars", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: "t~!s.h.i.ng"},
+			Spec: api.TierSpec{
+				Order: &tierOrder,
+			}}, false),
+		Entry("Tier: disallow default tier with an invalid order", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: names.DefaultTierName},
+			Spec: api.TierSpec{
+				Order: &defaultTierBadOrder,
+			}}, false),
+		Entry("Tier: allow default tier with the predefined order", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: names.DefaultTierName},
+			Spec: api.TierSpec{
+				Order: &defaultTierOrder,
+			}}, true),
+		Entry("Tier: disallow adminnetworkpolicy tier with an invalid order", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: names.AdminNetworkPolicyTierName},
+			Spec: api.TierSpec{
+				Order: &defaultTierBadOrder,
+			}}, false),
+		Entry("Tier: allow adminnetworkpolicy tier with the predefined order", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: names.AdminNetworkPolicyTierName},
+			Spec: api.TierSpec{
+				Order: &anpTierOrder,
+			}}, true),
+		Entry("Tier: disallow baselineadminnetworkpolicy tier with an invalid order", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: names.BaselineAdminNetworkPolicyTierName},
+			Spec: api.TierSpec{
+				Order: &defaultTierBadOrder,
+			}}, false),
+		Entry("Tier: allow baselineadminnetworkpolicy tier with the predefined order", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: names.BaselineAdminNetworkPolicyTierName},
+			Spec: api.TierSpec{
+				Order: &banpTierOrder,
+			}}, true),
+		Entry("Tier: allow a tier with a valid order", &api.Tier{
+			ObjectMeta: v1.ObjectMeta{Name: "platform"},
+			Spec: api.TierSpec{
+				Order: &tierOrder,
+			}}, true),
+
 		// NetworkPolicySpec Types field checks.
 		Entry("allow valid name", &api.NetworkPolicy{ObjectMeta: v1.ObjectMeta{Name: "thing"}}, true),
 		Entry("disallow name with dot", &api.NetworkPolicy{ObjectMeta: v1.ObjectMeta{Name: "t.h.i.ng"}}, false),
@@ -3062,6 +3209,7 @@ func init() {
 				WorkloadEndpoint: &api.WorkloadEndpointControllerConfig{},
 				ServiceAccount:   &api.ServiceAccountControllerConfig{},
 				Namespace:        &api.NamespaceControllerConfig{},
+				LoadBalancer:     &api.LoadBalancerControllerConfig{},
 			}}, true,
 		),
 		Entry("should accept valid reconciliation period on node",
@@ -3093,6 +3241,15 @@ func init() {
 		),
 		Entry("should accept valid reconciliation period on namespace",
 			api.NamespaceControllerConfig{ReconcilerPeriod: &v1.Duration{Duration: time.Second * 330}}, true,
+		),
+		Entry("should accept valid assignIPs value for LoadBalancer config",
+			api.LoadBalancerControllerConfig{AssignIPs: api.AllServices}, true,
+		),
+		Entry("should accept valid assignIPs value for LoadBalancer config",
+			api.LoadBalancerControllerConfig{AssignIPs: api.RequestedServicesOnly}, true,
+		),
+		Entry("should not accept invalid assignIPs value for LoadBalancer config",
+			api.LoadBalancerControllerConfig{AssignIPs: "incorrect-value"}, false,
 		),
 
 		// BGP Communities validation in BGPConfigurationSpec
@@ -3172,12 +3329,14 @@ func init() {
 			State:   "confirmed",
 			CIDR:    "10.0.0.0/24",
 			Node:    "node-1",
+			Type:    "host",
 		}, true),
 		Entry("should not accept deleted block affinities", libapiv3.BlockAffinitySpec{
 			Deleted: "true",
 			State:   "confirmed",
 			CIDR:    "10.0.0.0/24",
 			Node:    "node-1",
+			Type:    "host",
 		}, false),
 
 		Entry("should accept a valid BPFForceTrackPacketsFromIfaces value 'docker+'", api.FelixConfigurationSpec{BPFForceTrackPacketsFromIfaces: &[]string{"docker+"}}, true),

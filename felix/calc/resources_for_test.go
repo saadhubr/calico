@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2021 Tigera, Inc. All rights reserved.
+// Copyright (c) 2017-2025 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,19 +18,19 @@ package calc_test
 // the model package.
 
 import (
+	v3 "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
+	"github.com/projectcalico/api/pkg/lib/numorstring"
 	log "github.com/sirupsen/logrus"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 	v1 "k8s.io/api/core/v1"
 	discovery "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	v3 "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
-	"github.com/projectcalico/api/pkg/lib/numorstring"
-
 	"github.com/projectcalico/calico/libcalico-go/lib/backend/encap"
 	"github.com/projectcalico/calico/libcalico-go/lib/backend/model"
 	. "github.com/projectcalico/calico/libcalico-go/lib/backend/model"
 	"github.com/projectcalico/calico/libcalico-go/lib/net"
+	calinet "github.com/projectcalico/calico/libcalico-go/lib/net"
 )
 
 // Canned hostnames.
@@ -164,6 +164,13 @@ var localWlEp1DifferentIPs = WorkloadEndpoint{
 	},
 }
 
+var ep1IPs = []string{
+	"10.0.0.1/32", // ep1
+	"fc00:fe11::1/128",
+	"10.0.0.2/32", // shared with ep2
+	"fc00:fe11::2/128",
+}
+
 var localWlEp2 = WorkloadEndpoint{
 	State:      "active",
 	Name:       "cali2",
@@ -220,6 +227,20 @@ var remoteWlEp1 = WorkloadEndpoint{
 	IPv4Nets:   []net.IPNet{mustParseNet("10.0.0.5/32")},
 	Labels: map[string]string{
 		"id": "rem-ep-1",
+	},
+}
+
+var remoteWlEp1DualStack = WorkloadEndpoint{
+	State:      "active",
+	Name:       "cali1",
+	Mac:        mustParseMac("01:02:03:04:05:06"),
+	ProfileIDs: []string{"prof-1", "prof-2", "prof-missing"},
+	IPv4Nets:   []calinet.IPNet{mustParseNet("10.1.0.1/32"), mustParseNet("10.1.0.2/32")},
+	IPv6Nets:   []calinet.IPNet{mustParseNet("fe80:fe11::1/128"), mustParseNet("fe80:fe11::2/128")},
+	Labels: map[string]string{
+		"id": "rem-ep-1",
+		"x":  "x",
+		"y":  "y",
 	},
 }
 
@@ -646,6 +667,20 @@ var netSet2 = NetworkSet{
 		"a": "b",
 	},
 }
+
+var netSet3Key = NetworkSetKey{Name: "netset-3"}
+var netSet3 = NetworkSet{
+	Nets: []net.IPNet{
+		mustParseNet("12.1.2.142/32"),
+		mustParseNet("12.1.0.0/16"),
+		mustParseNet("12.1.0.0/8"),
+	},
+	Labels: map[string]string{
+		"a": "b",
+	},
+}
+var netset3Ip1a = mustParseNet("12.1.0.130/32").IP
+var netset3Ip1b = mustParseNet("12.1.2.142/32").IP
 
 var localHostIP = mustParseIP("192.168.0.1")
 var remoteHostIP = mustParseIP("192.168.0.2")
